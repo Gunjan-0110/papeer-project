@@ -1,0 +1,94 @@
+import os
+
+from dotenv import load_dotenv
+from langchain_classic.embeddings import CacheBackedEmbeddings
+from langchain_classic.storage import LocalFileStore
+from langchain_core.documents import Document
+from langchain_huggingface import HuggingFaceEmbeddings
+from langchain_qdrant import QdrantVectorStore
+from qdrant_client import QdrantClient
+from qdrant_client.models import Distance, VectorParams
+
+load_dotenv()
+
+# ── Config ───────────────────────────────────────────────────────────────────
+
+# 384 dimensions for all-MiniLM-L6-v2
+EMBEDDING_DIM = 384  
+
+# ── Singletons ────────────────────────────────────────────────────────────────
+
+model_name = "sentence-transformers/all-MiniLM-L6-v2"
+base_embeddings = HuggingFaceEmbeddings(model_name=model_name)
+embedding_file_store = LocalFileStore("./embedding_cache/")
+
+embeddings = CacheBackedEmbeddings.from_bytes_store(
+    base_embeddings,
+    embedding_file_store,
+    namespace=model_name.replace("/", "_"),
+    query_embedding_cache=True,
+    key_encoder="blake2b",
+)
+
+qdrant_url = os.getenv("QDRANT_URL", "http://localhost:6333")
+qdrant_api_key = os.getenv("QDRANT_API_KEY", None)
+
+qdrant_client = QdrantClient(
+    url=qdrant_url,
+    api_key=qdrant_api_key if qdrant_api_key else None,
+    timeout=120,
+)
+
+
+# ── Collection ───────────────────────────────────────────────────────────────
+
+def get_collection_name(session_id: str) -> str:
+    return f"papeer_{session_id.replace('-', '_')}"
+
+
+def get_vectorstore(session_id: str) -> QdrantVectorStore:
+    collection_name = get_collection_name(session_id)
+    if not qdrant_client.collection_exists(collection_name):
+        qdrant_client.create_collection(
+            collection_name=collection_name,
+            vectors_config=VectorParams(size=EMBEDDING_DIM, distance=Distance.COSINE),
+        )
+    return QdrantVectorStore(
+        client=qdrant_client,
+        collection_name=collection_name,
+        embedding=embeddings,
+    )
+
+
+# ── Public API ───────────────────────────────────────────────────────────────
+
+def add_paper(docs: list[Document], session_id: str) -> None:
+    get_vectorstore(session_id).add_documents(docs)
+
+
+def list_papers(session_id: str) -> list[str]:
+    collection_name = get_collection_name(session_id)
+    if not qdrant_client.collection_exists(collection_name):
+        return []
+    seen: set[str] = set()
+    titles: list[str] = []
+    offset = None
+    while True:
+        points, offset = qdrant_client.scroll(
+            collection_name=collection_name,
+            with_payload=True,
+            limit=100,
+            offset=offset,
+        )
+        for point in points:
+            title = (point.payload or {}).get("metadata", {}).get("title")
+            if title and title not in seen:
+                seen.add(title)
+                titles.append(title)
+        if offset is None:
+            break
+    return titles
+
+
+def search(query: str, session_id: str, k: int = 4) -> list[Document]:
+    return get_vectorstore(session_id).similarity_search(query, k=k)
