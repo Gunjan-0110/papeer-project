@@ -11,12 +11,7 @@ from qdrant_client.models import Distance, VectorParams
 
 load_dotenv()
 
-# ── Config ───────────────────────────────────────────────────────────────────
-
-# 384 dimensions for all-MiniLM-L6-v2
-EMBEDDING_DIM = 384  
-
-# ── Singletons ────────────────────────────────────────────────────────────────
+EMBEDDING_DIM = 384  # 384 dimensions for all-MiniLM-L6-v2
 
 model_name = "sentence-transformers/all-MiniLM-L6-v2"
 base_embeddings = HuggingFaceEmbeddings(model_name=model_name)
@@ -30,17 +25,12 @@ embeddings = CacheBackedEmbeddings.from_bytes_store(
     key_encoder="blake2b",
 )
 
-qdrant_url = os.getenv("QDRANT_URL", "http://localhost:6333")
-qdrant_api_key = os.getenv("QDRANT_API_KEY", None)
-
 qdrant_client = QdrantClient(
-    url=qdrant_url,
-    api_key=qdrant_api_key if qdrant_api_key else None,
+    url=os.getenv("QDRANT_URL", "http://localhost:6333"),
+    api_key=os.getenv("QDRANT_API_KEY", None),
     timeout=120,
 )
 
-
-# ── Collection ───────────────────────────────────────────────────────────────
 
 def get_collection_name(session_id: str) -> str:
     return f"papeer_{session_id.replace('-', '_')}"
@@ -59,8 +49,6 @@ def get_vectorstore(session_id: str) -> QdrantVectorStore:
         embedding=embeddings,
     )
 
-
-# ── Public API ───────────────────────────────────────────────────────────────
 
 def add_paper(docs: list[Document], session_id: str) -> None:
     get_vectorstore(session_id).add_documents(docs)

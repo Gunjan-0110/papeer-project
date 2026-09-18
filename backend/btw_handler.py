@@ -1,10 +1,14 @@
+import os
 from typing import Generator
 
+from dotenv import load_dotenv
 from langchain_core.prompts import ChatPromptTemplate
 from langchain_google_genai import ChatGoogleGenerativeAI
 from langchain_community.tools import DuckDuckGoSearchRun
 
 from backend.models import BtwRouteDecision
+
+load_dotenv()
 
 llm = ChatGoogleGenerativeAI(model="gemini-1.5-flash", temperature=0)
 
