@@ -28,7 +28,7 @@ class GraphState(TypedDict):
     rewrite_count: int
 
 # Initialize the Gemini model
-llm = ChatGoogleGenerativeAI(model="gemini-2.5-flash", temperature=0)
+llm = ChatGoogleGenerativeAI(model="gemini-1.5-flash", temperature=0)
 
 # Define the routing prompt template
 prompt = ChatPromptTemplate.from_messages([
