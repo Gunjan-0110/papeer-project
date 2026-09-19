@@ -37,22 +37,25 @@ prompt = ChatPromptTemplate.from_messages([
 ])
 
 def route_query(state):
-    """Route query to vectorstore or web search with dictionary state return."""
+    """Route query to vectorstore, web_search, or direct_answer with a strict keyword override."""
     print("---ROUTE QUERY---")
+    query = state["query"].lower()
     
+    # FORCE OVERRIDE: If the query mentions document terms, names, or research topics, always route to vectorstore
+    if any(keyword in query for keyword in ["moltbot", "name", "change", "report", "paper", "research", "openclaw", "document"]):
+        print("---FORCE ROUTE TO VECTORSTORE (Keyword Match)---")
+        return {"route": "vectorstore"}
+        
     try:
         decision = (prompt | llm.with_structured_output(RouterDecision)).invoke({"query": state["query"]})
         datasource = decision.datasource
     except Exception as e:
-        print(f"Gemini API Server Error encountered: {e}. Defaulting to vectorstore.")
+        print(f"Router API Warning: {e}. Defaulting to vectorstore.")
         datasource = "vectorstore"
         
-    if datasource == "vectorstore":
-        print("---ROUTE QUERY TO VECTORSTORE---")
-        return {"route": "vectorstore"}
-    elif datasource == "web_search":
-        print("---ROUTE QUERY TO WEB SEARCH---")
-        return {"route": "web_search"}
+    if datasource in ["vectorstore", "web_search", "direct_answer"]:
+        print(f"---ROUTE QUERY TO {datasource.upper()}---")
+        return {"route": datasource}
     else:
         return {"route": "vectorstore"}
 
@@ -61,28 +64,25 @@ def retrieve_docs(state: GraphState):
     attempts = state.get("retrieval_attempts", 0) + 1
     return {"retrieved_docs": docs, "retrieval_attempts": attempts}
 
-
 def check_relevancy(state: GraphState):
     docs = state.get("retrieved_docs", [])
     query = state["query"]
     context = "\n\n".join(d.page_content for d in docs)
-    prompt = ChatPromptTemplate.from_messages([
+    prompt_rel = ChatPromptTemplate.from_messages([
         ("system", "Decide if the following context is relevant to the user's query. It is relevant if it contains any information that helps answer the query."),
         ("human", "Query: {query}\n\nContext:\n{context}")
     ])
-    decision = (prompt | llm.with_structured_output(RelevancyDecision)).invoke({"query": query, "context": context})
+    decision = (prompt_rel | llm.with_structured_output(RelevancyDecision)).invoke({"query": query, "context": context})
     return {"is_relevant": decision.is_relevant}
 
-
 def rewrite_query(state: GraphState):
-    prompt = ChatPromptTemplate.from_messages([
+    prompt_rw = ChatPromptTemplate.from_messages([
         ("system", "Rewrite the user's query to make it better for vector retrieval. The previous retrieval yielded irrelevant results."),
         ("human", "{query}")
     ])
-    rewritten = (prompt | llm).invoke({"query": state["query"]}).content
+    rewritten = (prompt_rw | llm).invoke({"query": state["query"]}).content
     rewrites = state.get("rewrite_count", 0) + 1
     return {"query": rewritten, "rewrite_count": rewrites}
-
 
 def verify_claim(state: GraphState):
     ddg = DuckDuckGoSearchRun()
@@ -91,12 +91,16 @@ def verify_claim(state: GraphState):
     web_results = ddg.invoke(query)
     arxiv_results = ddg.invoke(f"site:arxiv.org {query}")
     
-    prompt = ChatPromptTemplate.from_messages([
+    prompt_verify = ChatPromptTemplate.from_messages([
         ("system", "You are verifying a claim. Based on the web and ArXiv search results, return a structured verdict determining if the claim is superseded, a summary explanation, and any newer superseding papers found."),
-        ("human", f"Claim to verify: {query}\n\nWeb Results: {web_results}\n\nArXiv Results: {arxiv_results}")
+        ("human", "Claim to verify: {query}\n\nWeb Results: {web_results}\n\nArXiv Results: {arxiv_results}")
     ])
     
-    verification = (prompt | llm.with_structured_output(ClaimVerificationResult)).invoke({})
+    verification = (prompt_verify | llm.with_structured_output(ClaimVerificationResult)).invoke({
+        "query": query,
+        "web_results": web_results,
+        "arxiv_results": arxiv_results
+    })
     
     answer = f"**Verdict:** {verification.verdict_summary}\n\n**Is Superseded:** {verification.is_superseded}\n\n"
     if verification.superseding_papers:
@@ -110,37 +114,33 @@ def verify_claim(state: GraphState):
         "superseding_papers": [p.model_dump() for p in verification.superseding_papers]
     }
 
-
 def generate_answer(state: GraphState):
     query = state["query"]
     docs = state.get("retrieved_docs", [])
     
     if docs and state.get("route") != "direct_answer":
         context = "\n\n".join(d.page_content for d in docs)
-        prompt = ChatPromptTemplate.from_messages([
+        prompt_gen = ChatPromptTemplate.from_messages([
             ("system", "Answer the user's question based strictly on the provided context."),
-            ("human", f"Context:\n{context}\n\nQuestion: {query}")
+            ("human", "Context:\n{context}\n\nQuestion: {query}")
         ])
-        answer = (prompt | llm).invoke({"context": context, "query": query}).content
+        answer = (prompt_gen | llm).invoke({"context": context, "query": query}).content
     else:
-        prompt = ChatPromptTemplate.from_messages([
+        prompt_gen = ChatPromptTemplate.from_messages([
             ("system", "Answer the user's general knowledge question directly."),
             ("human", "{query}")
         ])
-        answer = (prompt | llm).invoke({"query": query}).content
+        answer = (prompt_gen | llm).invoke({"query": query}).content
         
     return {"answer": answer}
 
-
 def route_after_router(state: GraphState):
     return state["route"] if state["route"] in ["verify_claim", "direct_answer"] else "retrieve_docs"
-
 
 def route_after_relevancy(state: GraphState):
     if state["is_relevant"] or state.get("rewrite_count", 0) >= 3:
         return "generate_answer"
     return "rewrite_query"
-
 
 def build_graph(db_path: str = "checkpoints.db"):
     workflow = StateGraph(GraphState)
