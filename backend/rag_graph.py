@@ -4,6 +4,7 @@ from typing import TypedDict, Annotated, Sequence
 
 from langchain_core.messages import BaseMessage, HumanMessage
 from langchain_core.prompts import ChatPromptTemplate
+from langchain_core.output_parsers import StrOutputParser
 from langchain_google_genai import ChatGoogleGenerativeAI
 from langchain_community.tools import DuckDuckGoSearchRun
 from langgraph.graph import StateGraph, END
@@ -11,7 +12,6 @@ from langgraph.checkpoint.sqlite import SqliteSaver
 
 from backend.models import RouterDecision, RelevancyDecision, ClaimVerificationResult
 from backend.vector_store import search
-
 
 class GraphState(TypedDict):
     messages: Annotated[Sequence[BaseMessage], operator.add]
@@ -27,37 +27,34 @@ class GraphState(TypedDict):
     is_relevant: bool
     rewrite_count: int
 
+# Initialize the Gemini model
+llm = ChatGoogleGenerativeAI(model="gemini-2.5-flash", temperature=0)
 
-# Phase 5: Initialize the free-tier Gemini model
-llm = ChatGoogleGenerativeAI(model="gemini-3.5-flash", temperature=0)
+# Define the routing prompt template
+prompt = ChatPromptTemplate.from_messages([
+    ("system", "You are an expert router. Decide whether the user query requires looking up the uploaded research paper/document ('vectorstore') or web search ('web_search')."),
+    ("human", "{query}")
+])
 
-
-# def route_query(state: GraphState):
-#     prompt = ChatPromptTemplate.from_messages([
-#         ("system", "Route the user's query to one of three paths: 'retrieve' if it asks about the uploaded papers, 'verify_claim' if it asks to verify a specific claim against current literature, or 'direct_answer' for general knowledge."),
-#         ("human", "{query}")
-#     ])
-#     decision = (prompt | llm.with_structured_output(RouterDecision)).invoke({"query": state["query"]})
-#     return {"route": decision.route}
 def route_query(state):
-    """Route query to vectorstore or web search."""
+    """Route query to vectorstore or web search with dictionary state return."""
     print("---ROUTE QUERY---")
     
     try:
-        # Attempt standard structured router call
         decision = (prompt | llm.with_structured_output(RouterDecision)).invoke({"query": state["query"]})
         datasource = decision.datasource
     except Exception as e:
         print(f"Gemini API Server Error encountered: {e}. Defaulting to vectorstore.")
-        # Fallback safeguard so the app never crashes
         datasource = "vectorstore"
         
     if datasource == "vectorstore":
         print("---ROUTE QUERY TO VECTORSTORE---")
-        return "vectorstore"
+        return {"route": "vectorstore"}
     elif datasource == "web_search":
         print("---ROUTE QUERY TO WEB SEARCH---")
-        return "web_search"
+        return {"route": "web_search"}
+    else:
+        return {"route": "vectorstore"}
 
 def retrieve_docs(state: GraphState):
     docs = search(state["query"], state["session_id"], k=4)
