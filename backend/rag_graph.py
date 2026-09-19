@@ -121,10 +121,10 @@ def generate_answer(state: GraphState):
     if docs and state.get("route") != "direct_answer":
         context = "\n\n".join(d.page_content for d in docs)
         prompt = ChatPromptTemplate.from_messages([
-            ("system", "Answer the user's question based strictly on the provided context from their uploaded papers."),
+            ("system", "Answer the user's question based strictly on the provided context."),
             ("human", f"Context:\n{context}\n\nQuestion: {query}")
         ])
-        answer = (prompt | llm).invoke({}).content
+        answer = (prompt | llm).invoke({"context": context, "query": query}).content
     else:
         prompt = ChatPromptTemplate.from_messages([
             ("system", "Answer the user's general knowledge question directly."),
