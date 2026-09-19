@@ -1,6 +1,5 @@
 from typing import Literal
-
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
 
 class BtwRouteDecision(BaseModel):
@@ -8,7 +7,9 @@ class BtwRouteDecision(BaseModel):
 
 
 class RouterDecision(BaseModel):
-    route: Literal["retrieve", "verify_claim", "direct_answer"]
+    datasource: str = Field(
+        description="Route to 'vectorstore' if the query asks about the uploaded document, research paper, or specific file content. Route to 'web_search' for current events, or 'direct_answer' for general chit-chat."
+    )
 
 
 class RelevancyDecision(BaseModel):
